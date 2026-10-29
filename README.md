@@ -1,171 +1,113 @@
 # usstock-bot
 
-A Telegram bot that broadcasts US-stock news flashes to a channel and moderates its discussion group: **pure Python standard library, single file, zero third-party dependencies** — `python3 usstock_bot.py` and it runs. All personal settings live in one `config.json`; the source contains no group/channel IDs, no admin IDs and no secrets.
+I built this for my own US-stock chat. It watches three Chinese financial wires (Jin10, Wallstreetcn, Eastmoney), picks out the items that are actually about US stocks, posts them to a Telegram channel, and babysits the linked discussion group on the side.
 
-## Features
+One file, stdlib only. `python3 usstock_bot.py` and it runs. Anything personal — token, group IDs, whitelist — lives in `config.json`, so copy `config.example.json`, fill it in, done.
 
-**News broadcasting**
-- Polls three public Chinese-language financial wires (Jin10, Wallstreetcn, Eastmoney) every ~60 seconds
-- A relevance filter keeps only US-stock items: index/macro anchors, listed companies, earnings, US policy, institutional research (keyword lists are plain constants at the top of the file — edit them to retarget the filter)
-- Three-layer deduplication: content fingerprint, 24h text similarity (≥ 0.88), and event-level anchor matching, so the same story from three wires posts once
-- Targets are chat IDs in `targets.txt` (one per line); when the bot is added as a channel admin, it registers that channel automatically
-- Long analysis pieces, list-style digests and teaser posts are filtered out; only flash-style items are pushed
+## How the news side works
 
-**Group moderation**
-- Promo/TG-link deletion, banword file (one word per line), flood detection (6 messages / 30 s)
-- Warnings accumulate; the 3rd warning mutes for 1 hour. Admins are **not** exempt from the flood/link rules
-- Duplicate detection for messages forwarded from channels (exact + fuzzy match)
-- Reply-based admin commands: `/mute`, `/unmute`, `/kick`, `/ban`, `/rules`
-- Kicks and bans are reported to the owner in private chat
-- Configurable whitelist for a helper bot the group relies on (e.g. a search bot): its own messages skip moderation, links pointing at it are not treated as promo, and inline results sent via it are exempt from link deletion (banwords still apply)
-- New members get a welcome message with the group rules
+It polls the three wires about every 60 seconds. Deciding what counts as "US stock news" is just keyword tables at the top of the file: index/macro anchors, company names (Chinese names included), earnings terms, US policy names. Those lists are my editorial taste, you will want to edit them.
 
-**Private chat**
-- `/news` (or 「新闻」/「快讯」): the latest matched flashes, for anyone
-- 「进群」: a one-time invite link to the discussion group
+Dedup is three layers, because the same flash arrives from all three wires with different wording:
 
-## Deployment
+- content fingerprint for exact copies
+- 24h text similarity (≥ 0.88) for reworded copies
+- event-level anchors, so three takes on the same earnings print still post once
 
-1. **Create the bot and store the token**: talk to @BotFather, `/newbot`, save the token into a file of its own, e.g. `/root/.usstock-bot_token` (chmod 600). Add the bot to your channel and discussion group as admin (it needs message deletion, member restriction and invite-link permissions).
-2. **Configure**: `cp config.example.json config.json` and fill in your own values (see the table below); `cp banwords.example.txt banwords.txt` and edit the word list. Put your broadcast channel's ID (or leave the file empty and let the bot auto-register the channel) into `targets.txt`, one ID per line.
-3. **Run** in the foreground first to check it works:
+Long analysis pieces, numbered listicles and "click here for more" teasers get dropped. The channel only gets flash items. Broadcast targets are chat IDs in `targets.txt`, one per line; if the bot is made admin of a channel it also registers that channel by itself.
 
-   ```bash
-   python3 usstock_bot.py
-   ```
+## Moderation notes (learned the hard way)
 
-   For permanent operation use systemd (adjust the paths):
+- Promo links and TG invite links are deleted, warnings accumulate, third warning is a 1-hour mute. Banwords are a plain text file, one word per line.
+- Admins are NOT exempt from the flood and link rules. That was deliberate — an admin forwarding junk into the group caused a duplicate mess once.
+- Duplicate-checking only applies to channel forwards landing in the group. Members' own posts are not checked, people repeat themselves, that's fine.
+- Kicks and bans get reported to the owner by DM, with the group name attached.
+- There is a whitelist for a helper bot the group relies on (a search bot): its own messages skip moderation, links pointing at it don't count as promo, and inline results sent through it are exempt from link deletion. Banwords still apply to it.
+- Reply to a message with `/mute`, `/unmute`, `/kick` or `/ban` to act on its author. `/rules` posts the group rules.
 
-   ```ini
-   [Unit]
-   Description=usstock-bot
-   After=network-online.target
+In private chat, anyone can send `/news` for the latest matched flashes, or ask for a one-time invite link to the group.
 
-   [Service]
-   WorkingDirectory=/opt/usstock-bot
-   ExecStart=/usr/bin/python3 /opt/usstock-bot/usstock_bot.py
-   Restart=always
-   RestartSec=5
+## Running it
 
-   [Install]
-   WantedBy=multi-user.target
-   ```
+Get a token from @BotFather and save it into its own file (chmod 600) — the config points at that file, the token itself is never in the config or the code. The bot needs to be admin in both the channel and the group (delete messages, restrict members, invite links).
 
-   Save as `/etc/systemd/system/usstock-bot.service`, then `systemctl enable --now usstock-bot`.
+```bash
+python3 usstock_bot.py   # foreground first, check it behaves
+```
 
-Runtime state (seen item IDs, fingerprints, warnings, pending notices) is kept in `state.json` next to the script and is created automatically.
+For a permanent install I use systemd:
 
-## Configuration (config.json)
+```ini
+[Unit]
+Description=usstock-bot
+After=network-online.target
 
-| Key | Description |
+[Service]
+WorkingDirectory=/opt/usstock-bot
+ExecStart=/usr/bin/python3 /opt/usstock-bot/usstock_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+State (seen item IDs, fingerprints, warning counts) sits in `state.json` next to the script and creates itself.
+
+## Config keys worth knowing
+
+| Key | What it does |
 | --- | --- |
-| `token_file` | Path to the file containing the bot token. The token never goes into config or code. |
-| `owner_ids` | Telegram user IDs treated as owners: they get the owner `/start` behaviour, count as admins everywhere, and their private `/news` is answered with priority handling. |
-| `report_to` | User ID that receives kick/ban reports. `0` disables reports. |
-| `group_id` | The discussion group ID; one-time invite links are created for this group. |
-| `group_labels` | Map of group ID (as string) → display name, used in kick/ban reports. |
-| `bot_id` | The bot's own Telegram user ID (ask @userinfobot with your bot, or read it from the token prefix). |
-| `whitelisted_user_ids` | User/bot IDs exempt from moderation (see Features). |
-| `whitelisted_bot_usernames` | Bot usernames (without `@`) whose t.me links are not counted as promo links. |
-| `banwords_file` | Banword list file, resolved relative to the script directory. |
+| `token_file` | File holding the bot token |
+| `owner_ids` | User IDs treated as owners/admins everywhere |
+| `report_to` | Who gets kick/ban reports by DM (0 = off) |
+| `group_id` | Discussion group; invite links are made for this group |
+| `group_labels` | Group ID → name, used in reports |
+| `bot_id` | The bot's own user ID (the part before the colon in the token) |
+| `whitelisted_user_ids` / `whitelisted_bot_usernames` | The helper-bot exemption described above |
+| `banwords_file` | Banword list path |
 
-## Notes
+The full set is in `config.example.json`.
 
-- UI strings are in Chinese (the bot was built for a Chinese-language community); they are plain string literals in `usstock_bot.py` and can be replaced freely.
-- The news sources are public web endpoints of Jin10 / Wallstreetcn / Eastmoney; if a source changes its API the corresponding `fetch_*` function needs adjusting.
-- This is a template: the keyword lists (anchors, companies, policy terms) encode one community's editorial choices — review and adapt them before use.
+One caveat: the three wires are unofficial web endpoints. Every now and then Jin10 reshuffles its API and the matching `fetch_*` function needs a five-minute fix. UI strings are Chinese literals in the file; replace them if your group speaks something else.
 
-## Custom development
-
-Fields, filters, thresholds and texts are all adjustable. If your community needs a custom flow (different news sources, extra moderation rules, integrations), a customized or hosted version can be arranged — contact the author.
-
-## License
-
-MIT, see [LICENSE](LICENSE).
+MIT license, see LICENSE.
 
 ---
 
 ## 中文版
 
-一个 Telegram 机器人：把美股快讯播报到频道，同时管理绑定的讨论群。**纯 Python 标准库、单文件、零第三方依赖**，`python3 usstock_bot.py` 就能跑。所有个人设置都在一个 `config.json` 里，源码不写死任何群/频道 ID、管理员 ID 或密钥。
+自己有个美股群，就写了这个机器人：盯金十、华尔街见闻、东方财富三个快讯源，把真正跟美股有关的挑出来发到频道，顺带管一下绑定的讨论群。
 
-### 功能
+单文件、纯标准库，`python3 usstock_bot.py` 就能跑。token、群 ID、白名单这些个人设置全在 `config.json` 里，复制 `config.example.json` 填好就行，源码里不写死任何东西。
 
-**快讯播报**
-- 每约 60 秒轮询三个公开中文财经快讯源（金十、华尔街见闻、东方财富）
-- 相关性过滤只保留美股内容：大盘/宏观锚点、上市公司、财报、美国政策、机构研报（关键词表是文件顶部的普通常量，可自行增删以调整口径）
-- 三层去重：正文指纹、24 小时文本相似度（≥ 0.88）、事件级锚点匹配，同一条新闻三个源发来只发一次
-- 播报目标是 `targets.txt` 里的 chat ID（一行一个）；机器人被拉进频道设为管理员后会自动登记该频道
-- 长篇分析、编号要点类、引流预告类内容会被拦下，只推快讯体
+### 新闻这边怎么筛
 
-**群管理**
-- 广告/引流链接自动删、违禁词文件（一行一词）、刷屏检测（30 秒 6 条）
-- 警告累计，第 3 次禁言 1 小时；管理员也不豁免刷屏/链接规则
-- 频道转发消息的重复检测（精确 + 模糊匹配）
-- 回复式管理员命令：`/mute`、`/unmute`、`/kick`、`/ban`、`/rules`
-- 踢人/封禁后私聊报告号主
-- 可配置白名单（给群里依赖的辅助机器人，如搜索机器人）：其本人消息整条豁免删帖，指向它的链接不算引流，经它发出的内联结果豁免链接删除（违禁词不豁免）
-- 新人进群自动发欢迎语 + 群规
+大约每 60 秒轮询一次三个源。什么算「美股相关」就是文件开头几张关键词表：大盘和宏观锚点、公司名（带中文名）、财报词、美国政策人名。这几张表是我的口味，你用肯定要改。
 
-**私聊**
-- `/news`（或发「新闻」/「快讯」）：最新命中的快讯，所有人可用
-- 发「进群」：领讨论群的一次性邀请链接
+去重做了三层，因为同一条快讯三个源都会发、措辞还不一样：正文指纹挡完全重复的，24 小时相似度（≥0.88）挡改写的，最后一层按事件锚点合并——同一场财报三个源写三遍，频道里只出现一次。长篇分析、编号要点、引流预告一律拦掉，频道只进快讯体。
 
-### 部署三步
+播报目标写在 `targets.txt`，一行一个 chat ID；机器人被设为频道管理员后也会自动把那个频道登记进来。
 
-1. **建机器人拿 token**：在 Telegram 里找 @BotFather 发 `/newbot`，把 token 单独存成一个文件，例如 `/root/.usstock-bot_token`（权限 600）。把机器人拉进你的频道和讨论群并设为管理员（需要删消息、限制成员、邀请链接权限）。
-2. **填配置**：`cp config.example.json config.json` 按下表改成你自己的值；`cp banwords.example.txt banwords.txt` 改词表。播报频道 ID 写进 `targets.txt`（一行一个；也可以留空，等机器人进频道后自动登记）。
-3. **启动**：先前台试跑确认无误：
+### 群管的几个决定（都是踩坑踩出来的）
 
-   ```bash
-   python3 usstock_bot.py
-   ```
+- 广告和引流链接自动删，警告累计 3 次禁言 1 小时，违禁词是单独的文本文件一行一词
+- 管理员不豁免刷屏和链接规则——这是故意的，之前有管理员往群里转垃圾，重复帖删到手软
+- 重复检测只针对频道转发进群的消息，成员自己说话不查，人重复自己很正常
+- 踢人、封禁之后会私聊给号主发一份报告，带群名
+- 给群里在用的搜索机器人留了白名单：它本人的消息不删、指向它的链接不算引流、经它发出的搜索结果豁免链接删除，但违禁词照样管它
+- 回复某人的消息发 `/mute`、`/unmute`、`/kick`、`/ban` 就能处理他；`/rules` 发群规
 
-   正式常驻用 systemd（示例 unit，把路径换成你的实际路径）：
+私聊里任何人发 `/news` 能看最新命中的快讯，发「进群」领一次性邀请链接。
 
-   ```ini
-   [Unit]
-   Description=usstock-bot
-   After=network-online.target
+### 跑起来
 
-   [Service]
-   WorkingDirectory=/opt/usstock-bot
-   ExecStart=/usr/bin/python3 /opt/usstock-bot/usstock_bot.py
-   Restart=always
-   RestartSec=5
+找 @BotFather 建机器人，token 单独存一个文件（权限 600），config 里只写文件路径。机器人要在频道和群里都是管理员（删消息、限制成员、邀请链接三个权限）。
 
-   [Install]
-   WantedBy=multi-user.target
-   ```
+先前台跑一遍看没问题，再用 systemd 常驻（unit 示例在英文版里，路径换成你自己的）。运行状态（看过的快讯 ID、指纹、警告次数）存在同目录的 `state.json`，自动生成。
 
-   存为 `/etc/systemd/system/usstock-bot.service` 后 `systemctl enable --now usstock-bot`。
+配置项主要就这些：`token_file`（token 文件）、`owner_ids`（号主 ID）、`report_to`（踢人报告发给谁，0 为关）、`group_id`（讨论群）、`bot_id`（机器人自己的 ID，看 token 冒号前那段）、`whitelisted_user_ids` / `whitelisted_bot_usernames`（白名单）、`banwords_file`（词表路径）。全集看 `config.example.json`。
 
-运行状态（已见快讯 ID、指纹、警告次数、待删提示）保存在同目录的 `state.json`，自动生成，不用管。
+丑话说前面：三个源都是非官方网页接口，金十隔段时间就会改一次接口，对应的 `fetch_*` 函数得跟着修五分钟。界面文案是中文字符串，群里不用中文的话自己替换。
 
-### 配置项说明（config.json）
-
-| 键 | 说明 |
-| --- | --- |
-| `token_file` | 存放 Bot Token 的文件路径。token 不写进 config、更不写进代码。 |
-| `owner_ids` | 号主的 TG 数字 ID 列表：走号主版 `/start`、在任何群里都视为管理员。 |
-| `report_to` | 接收踢人/封禁报告的用户 ID；填 0 关闭报告。 |
-| `group_id` | 讨论群 ID，一次性邀请链接就是给这个群生成的。 |
-| `group_labels` | 群 ID（字符串）→ 显示名的映射，用于踢人/封禁报告。 |
-| `bot_id` | 机器人自己的 TG 数字 ID（可用 @userinfobot 查，或看 token 冒号前一段）。 |
-| `whitelisted_user_ids` | 豁免群管的用户/机器人 ID 列表（见功能说明）。 |
-| `whitelisted_bot_usernames` | 机器人用户名（不带 `@`）列表，指向它们的 t.me 链接不算引流。 |
-| `banwords_file` | 违禁词文件路径（相对路径按脚本所在目录解析）。 |
-
-### 说明
-
-- 界面文案为中文，在 `usstock_bot.py` 里都是普通字符串，可自行替换。
-- 新闻源是金十 / 华尔街见闻 / 东方财富的公开网页接口；源方改接口时需相应调整对应的 `fetch_*` 函数。
-- 这是模板：关键词表（锚点、公司、政策词）体现的是一个社区的编辑口径，使用前请按自己的需要审阅调整。
-
-### 定制开发
-
-字段、过滤口径、阈值、文案都能自己改。如果你的社区有特殊流程（换新闻源、加群管规则、和其他系统打通等），需要定制版或代部署，可联系作者获取付费定制服务。
-
-### License
-
-MIT，见 [LICENSE](LICENSE)。
+MIT，见 LICENSE。
