@@ -1,0 +1,11 @@
+# Example banwords: one word or phrase per line.
+# A group message containing any of these is deleted and the sender warned.
+# Copy this file to banwords.txt and adapt it to your own community.
+free money
+guaranteed profit
+casino bonus
+betting tips
+crypto giveaway
+earn $500 a day
+work from home scam
+cheap followers

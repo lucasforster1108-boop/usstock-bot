@@ -1,0 +1,7 @@
+config.json
+state.json
+targets.txt
+banwords.txt
+__pycache__/
+*.pyc
+*.log
